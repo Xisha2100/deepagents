@@ -21,17 +21,17 @@
 
 ```mermaid
 graph TD
-    User([1. 提交复杂 ML/数据分析任务]) --> Orch[Orchestrator 主编排器<br>Claude-Sonnet]
+    User(["1. 提交复杂 ML/数据分析任务"]) --> Orch["Orchestrator 主编排器<br>Claude-Sonnet"]
     
     subgraph "Orchestrator 异构子级分工"
-        Orchestrator -->|2a. 查阅网络信息| Researcher[Researcher-agent<br>Nemotron Super]
-        Orchestrator -->|2b. 委托重度 GPU 计算| Processor[Data-processor-agent<br>Claude-Sonnet]
+        Orchestrator -->|2a. 查阅网络信息| Researcher["Researcher-agent<br>Nemotron Super"]
+        Orchestrator -->|2b. 委托重度 GPU 计算| Processor["Data-processor-agent<br>Claude-Sonnet"]
     end
 
     subgraph "云端 Modal GPU 沙盒空间 (A10G)"
-        Processor -->|3. 编写 cuDF/cuML 脚本| RunScript[在 GPU 上极速执行分析]
-        RunScript -->|如果遇到 API 缺陷| UpdateSkill[4. 自主修改 skills/cudf-analytics/SKILL.md]
-        RunScript -->|生成高清报表| Charts[Seaborn/Matplotlib 数据图]
+        Processor -->|3. 编写 cuDF/cuML 脚本| RunScript["在 GPU 上极速执行分析"]
+        RunScript -->|如果遇到 API 缺陷| UpdateSkill["4. 自主修改 skills/cudf-analytics/SKILL.md"]
+        RunScript -->|生成高清报表| Charts["Seaborn/Matplotlib 数据图"]
     end
 
     UpdateSkill -->|固化记忆| Processor

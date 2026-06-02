@@ -10,21 +10,21 @@
 
 ```mermaid
 graph TD
-    User([用户输入]) --> Orchestrator[主 Agent (create_deep_agent)]
+    User(["用户输入"]) --> Orchestrator["主 Agent (create_deep_agent)"]
     
     subgraph "Deep Agents 核心中间件栈 (Middleware Stack)"
-        Orchestrator --> Todo[TodoListMiddleware<br>任务清单管理]
-        Todo --> Skills[SkillsMiddleware<br>按需加载 SKILL.md]
-        Skills --> FS[FilesystemMiddleware<br>读/写/改/Grep/Glob 授权操作]
-        FS --> Sub[SubAgentMiddleware<br>通过 task 工具调用同步子 Agent]
-        Sub --> AsyncSub[AsyncSubAgentMiddleware<br>通过 start_async_task 等工具调用异步子 Agent]
-        AsyncSub --> Memory[MemoryMiddleware<br>加载 AGENTS.md 写入 System Prompt]
-        Memory --> HITL[HumanInTheLoopMiddleware<br>审批中断机制]
+        Orchestrator --> Todo["TodoListMiddleware<br>任务清单管理"]
+        Todo --> Skills["SkillsMiddleware<br>按需加载 SKILL.md"]
+        Skills --> FS["FilesystemMiddleware<br>读/写/改/Grep/Glob 授权操作"]
+        FS --> Sub["SubAgentMiddleware<br>通过 task 工具调用同步子 Agent"]
+        Sub --> AsyncSub["AsyncSubAgentMiddleware<br>通过 start_async_task 等工具调用异步子 Agent"]
+        AsyncSub --> Memory["MemoryMiddleware<br>加载 AGENTS.md 写入 System Prompt"]
+        Memory --> HITL["HumanInTheLoopMiddleware<br>审批中断机制"]
     end
     
-    HITL --> LLM{大语言模型调用<br>Claude / OpenAI / Nemotron}
-    LLM --> |返回文本或工具调用| ToolEx[ToolExclusionMiddleware<br>隐藏被排除的工具]
-    ToolEx --> |工具调用物理执行| Backend[存储与沙盒后端<br>StateBackend / FilesystemBackend / Modal]
+    HITL --> LLM{"大语言模型调用<br>Claude / OpenAI / Nemotron"}
+    LLM --> |返回文本或工具调用| ToolEx["ToolExclusionMiddleware<br>隐藏被排除的工具"]
+    ToolEx --> |工具调用物理执行| Backend["存储与沙盒后端<br>StateBackend / FilesystemBackend / Modal"]
     Backend --> |更新状态| Orchestrator
 ```
 

@@ -19,11 +19,11 @@
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as 用户 (携带 JWT Token)
-    participant GW as 部署网关 (Supabase Validator)
-    participant Mem as MemoryMiddleware (记忆中间件)
+    actor User as "用户 (携带 JWT Token)"
+    participant GW as "部署网关 (Supabase Validator)"
+    participant Mem as "MemoryMiddleware (记忆中间件)"
     participant Core as Deep Agent 核心
-    participant Storage as 物理存储层 (S3 / 数据库 / 本地)
+    participant Storage as "物理存储层 (S3 / 数据库 / 本地)"
 
     User->>GW: 提交创作请求 + Supabase JWT
     GW->>GW: 校验 Token 合法性，提取 `User_ID`
@@ -31,7 +31,7 @@ sequenceDiagram
     Mem->>Storage: 读取 '/memories/user/preferences.md' (自动映射至 Storage:/user_id/preferences.md)
     Storage-->>Mem: 返回当前用户的私有风格和记忆
     Mem->>Core: 组装带有该用户专有记忆的 System Prompt 并启动创作
-    Core-->>User: 返回度身定制的创作内容 (如符合其风格的推文)
+    Core-->>User: 返回度身定制的创作内容 (如符合其风格 of 推文)
 ```
 
 ---

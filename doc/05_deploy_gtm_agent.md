@@ -20,17 +20,17 @@
 
 ```mermaid
 graph TD
-    User([用户提出 GTM 战略任务]) --> Orchestrator[GTM 主策略 Agent<br>Orchestrator]
+    User(["用户提出 GTM 战略任务"]) --> Orchestrator["GTM 主策略 Agent<br>Orchestrator"]
     
     subgraph "同步级联 (Sync Subagent, 本地容器)"
-        Orchestrator -->|通过 tools.task 调用| Researcher[Market Researcher 子 Agent]
-        Researcher -->|读取| ResAGENTS[Researcher/AGENTS.md]
-        Researcher -->|触发| CompSkill[skills/competitor-analysis]
+        Orchestrator -->|通过 tools.task 调用| Researcher["Market Researcher 子 Agent"]
+        Researcher -->|读取| ResAGENTS["Researcher/AGENTS.md"]
+        Researcher -->|触发| CompSkill["skills/competitor-analysis"]
     end
     
     subgraph "异步级联 (Async Subagent, 云端独立集群)"
-        Orchestrator -.->|通过 start_async_task 异步启动| Finance[Financial Evaluator 异步子 Agent]
-        Finance -.->|在后台 Docker 中跑重度分析| Run[运行财务报表预测模型]
+        Orchestrator -.->|通过 start_async_task 异步启动| Finance["Financial Evaluator 异步子 Agent"]
+        Finance -.->|在后台 Docker 中跑重度分析| Run["运行财务报表预测模型"]
         Finance -.->|执行完毕通知状态| Orchestrator
     end
     

@@ -20,20 +20,20 @@
 
 ```mermaid
 graph TD
-    User([启动调优任务]) --> Optimizer[better-harness 调优主控]
+    User(["启动调优任务"]) --> Optimizer["better-harness 调优主控"]
     
     subgraph "元优化双环 (Meta-Optimization Loop)"
-        Optimizer -->|1. 运行 Baseline| Runner[Pytest 评估器]
-        Runner -->|收集失败用例| Logs[报错日志与 Trace 痕迹]
-        Logs -->|2. 提供给外部模型| Outer[外部 Agent<br>Claude-Sonnet]
-        Outer -->|3. 自行修改内部 Agent 源码| Proposed[自编辑候选方案<br>Proposer]
+        Optimizer -->|1. 运行 Baseline| Runner["Pytest 评估器"]
+        Runner -->|收集失败用例| Logs["报错日志与 Trace 痕迹"]
+        Logs -->|2. 提供给外部模型| Outer["外部 Agent<br>Claude-Sonnet"]
+        Outer -->|3. 自行修改内部 Agent 源码| Proposed["自编辑候选方案<br>Proposer"]
         
-        Proposed -->|4. 应用内存/物理热补丁| Patch[patch_from_env() 动态热补丁拦截]
+        Proposed -->|4. 应用内存/物理热补丁| Patch["patch_from_env() 动态热补丁拦截"]
         Patch -->|5. 跑分测试集| Runner
     end
 
-    Runner -->|测试通过率提升| Accept[6. Accept: 固化修改, 生成最终 Agent]
-    Runner -->|通过率未提升| Discard[7. Discard: 回滚方案, 进入下一轮探索]
+    Runner -->|测试通过率提升| Accept["6. Accept: 固化修改, 生成最终 Agent"]
+    Runner -->|通过率未提升| Discard["7. Discard: 回滚方案, 进入下一轮探索"]
 ```
 
 ---

@@ -17,18 +17,18 @@
 
 ```mermaid
 graph LR
-    User([用户在 Web/SDK 提出任务]) --> Deploy[LangSmith 部署端点]
-    Deploy -->|根据 agent.json 构建| Sandbox[云端隔离 Docker 沙盒]
+    User(["用户在 Web/SDK 提出任务"]) --> Deploy["LangSmith 部署端点"]
+    Deploy -->|根据 agent.json 构建| Sandbox["云端隔离 Docker 沙盒"]
     
     subgraph "Docker 沙盒内环境"
-        Sandbox --> Memory[AGENTS.md 指导规约]
-        Sandbox --> ReviewSkill[skills/code-review 技能]
-        Sandbox --> PlanSkill[skills/planning 技能]
-        Sandbox --> ExecTool[execute 命令行工具]
+        Sandbox --> Memory["AGENTS.md 指导规约"]
+        Sandbox --> ReviewSkill["skills/code-review 技能"]
+        Sandbox --> PlanSkill["skills/planning 技能"]
+        Sandbox --> ExecTool["execute 命令行工具"]
     end
 
-    ExecTool -->|在沙盒中运行| CodeChange[(代码修改与单测跑通)]
-    CodeChange -->|Git 提交 / PR| End([完成交付])
+    ExecTool -->|在沙盒中运行| CodeChange[("代码修改与单测跑通")]
+    CodeChange -->|Git 提交 / PR| End(["完成交付"])
 ```
 
 ---

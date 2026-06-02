@@ -20,27 +20,27 @@
 
 ```mermaid
 graph TD
-    UserInput([用户输入任务: '写一篇带图的技术博客']) --> Core[Content Builder Agent]
+    UserInput(["用户输入任务: '写一篇带图的技术博客'"]) --> Core["Content Builder Agent"]
     
     subgraph "自组装物理结构"
-        Core -->|1. 语气风格| Mem[AGENTS.md]
-        Core -->|2. 文案写作流| Skills[skills/ 目录]
-        Core -->|3. 并发学者副手| SubYAML[subagents.yaml]
+        Core -->|1. 语气风格| Mem["AGENTS.md"]
+        Core -->|2. 文案写作流| Skills["skills/ 目录"]
+        Core -->|3. 并发学者副手| SubYAML["subagents.yaml"]
     end
 
     subgraph "大模型工具物理执行与图输出"
-        Core -->|调用 Web 检索| SearchTool[tavily_search / web_search]
-        Core -->|调用 Gemini 绘图| ImageTool[generate_cover / generate_social_image]
+        Core -->|调用 Web 检索| SearchTool["tavily_search / web_search"]
+        Core -->|调用 Gemini 绘图| ImageTool["generate_cover / generate_social_image"]
     end
 
     subgraph "Rich TUI 增量刷新大屏"
-        Core -->|4. astream 实时吐出 values 变更| Live[rich.live.Live 容器]
-        Live -->|思考时| Spinner[动态菊花 Spinner 闪烁]
-        Live -->|输出文本时| MDPanel[Markdown 渲染控制面板]
-        Live -->|工具执行成功时| Checked[✓ File Written / ✓ Image Saved 打勾状态]
+        Core -->|4. astream 实时吐出 values 变更| Live["rich.live.Live 容器"]
+        Live -->|思考时| Spinner["动态菊花 Spinner 闪烁"]
+        Live -->|输出文本时| MDPanel["Markdown 渲染控制面板"]
+        Live -->|工具执行成功时| Checked["✓ File Written / ✓ Image Saved 打勾状态"]
     end
 
-    Checked --> User([5. 完美交付本地 Markdown 长文与 hero.png 配图])
+    Checked --> User(["5. 完美交付本地 Markdown 长文与 hero.png 配图"])
 ```
 
 ---

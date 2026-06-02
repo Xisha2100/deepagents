@@ -20,15 +20,15 @@
 
 ```mermaid
 graph TD
-    User([用户提出大课题]) --> Root[Root 根 Agent<br>Depth = 2<br>拥有 REPL + PTC]
+    User(["用户提出大课题"]) --> Root["Root 根 Agent<br>Depth = 2<br>拥有 REPL + PTC"]
     
-    Root -->|REPL 中 Promise.all 扇出| GP1[CompiledSubAgent 1<br>Depth = 1<br>拥有 REPL + PTC]
-    Root -->|REPL 中 Promise.all 扇出| GP2[CompiledSubAgent 2<br>Depth = 1<br>拥有 REPL + PTC]
+    Root -->|REPL 中 Promise.all 扇出| GP1["CompiledSubAgent 1<br>Depth = 1<br>拥有 REPL + PTC"]
+    Root -->|REPL 中 Promise.all 扇出| GP2["CompiledSubAgent 2<br>Depth = 1<br>拥有 REPL + PTC"]
     
-    GP1 -->|再次 Promise.all 扇出| Leaf1[Leaf Agent A<br>Depth = 0<br>极简内置版，无 REPL]
-    GP1 -->|再次 Promise.all 扇出| Leaf2[Leaf Agent B<br>Depth = 0<br>极简内置版，无 REPL]
+    GP1 -->|再次 Promise.all 扇出| Leaf1["Leaf Agent A<br>Depth = 0<br>极简内置版，无 REPL"]
+    GP1 -->|再次 Promise.all 扇出| Leaf2["Leaf Agent B<br>Depth = 0<br>极简内置版，无 REPL"]
     
-    GP2 -->|再次 Promise.all 扇出| Leaf3[Leaf Agent C<br>Depth = 0]
+    GP2 -->|再次 Promise.all 扇出| Leaf3["Leaf Agent C<br>Depth = 0"]
 ```
 
 ---

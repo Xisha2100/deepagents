@@ -20,16 +20,16 @@
 
 ```mermaid
 graph LR
-    User([开发者提问<br>'怎么配置 Memory 模块?']) --> Agent[MCP Docs Agent]
+    User(["开发者提问<br>'怎么配置 Memory 模块?'"]) --> Agent["MCP Docs Agent"]
     
     subgraph "Model Context Protocol (MCP) 外部服务集群"
-        MCP[LangChain Docs MCP Server]
-        MCP -->|搜索核心文档| Web[Live Docs / 向量数据库]
+        MCP["LangChain Docs MCP Server"]
+        MCP -->|搜索核心文档| Web["Live Docs / 向量数据库"]
     end
 
     Agent -->|1. 根据 tools.json 声明调用 MCP| MCP
     MCP -->|2. 执行检索并提炼 Markdown| Agent
-    Agent -->|3. 基于最新的真实语法编写代码| Code[输出完美零幻觉代码与页面引用链接]
+    Agent -->|3. 基于最新的真实语法编写代码| Code["输出完美零幻觉代码与页面引用链接"]
     Code --> User
 ```
 

@@ -23,9 +23,9 @@
 sequenceDiagram
     autonumber
     actor User as 用户
-    participant Sup as Supervisor (主进程协调器)
+    participant Sup as "Supervisor (主进程协调器)"
     participant SDK as LangGraph SDK 异步中间件
-    participant Server as 自托管 FastAPI 服务 (Port: 2024)
+    participant Server as "自托管 FastAPI 服务 (Port: 2024)"
     participant SubAgent as 本地物理 Deep Agent 实例
 
     User->>Sup: 提出复杂调查任务 ("把这个主题进行深度检索")

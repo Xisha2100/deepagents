@@ -20,16 +20,16 @@
 
 ```mermaid
 graph TD
-    User([用户下载 content-writer.zip]) --> Unzip[解压至本地目录 .deepagents/]
+    User(["用户下载 content-writer.zip"]) --> Unzip["解压至本地目录 .deepagents/"]
     
     subgraph "标准解压布局 .deepagents/"
-        Unzip --> Mem[AGENTS.md<br>多媒体写作大纲规约]
-        Unzip --> SkillA[skills/blog-post/SKILL.md<br>长文起草与 SEO 技能]
-        Unzip --> SkillB[skills/social-media/SKILL.md<br>LinkedIn/Twitter 自动转译技能]
+        Unzip --> Mem["AGENTS.md<br>多媒体写作大纲规约"]
+        Unzip --> SkillA["skills/blog-post/SKILL.md<br>长文起草与 SEO 技能"]
+        Unzip --> SkillB["skills/social-media/SKILL.md<br>LinkedIn/Twitter 自动转译技能"]
     end
 
-    Run[运行终端指令 deepagents] --> TUI[拉起 Textual TUI 图形交互 REPL]
-    TUI -->|自动扫描 .deepagents/ 并装配| RunAgent[装配就绪的本地内容主笔 Agent]
+    Run["运行终端指令 deepagents"] --> TUI["拉起 Textual TUI 图形交互 REPL"]
+    TUI -->|自动扫描 .deepagents/ 并装配| RunAgent["装配就绪的本地内容主笔 Agent"]
     RunAgent --> User
 ```
 

@@ -25,8 +25,8 @@ sequenceDiagram
     actor User as 开发者
     participant Loop as ralph_mode.py 外循环管理器
     participant CLI as deepagents_cli 非交互式运行器
-    participant LLM as 大语言模型 (Claude / OpenAI)
-    participant FS as 物理磁盘工作空间 (带有 Git 追踪)
+    participant LLM as "大语言模型 (Claude / OpenAI)"
+    participant FS as "物理磁盘工作空间 (带有 Git 追踪)"
 
     User->>Loop: 启动任务 ("帮我用 Python 写一个博客系统")
     loop 直到最大迭代次数或满足验收条件

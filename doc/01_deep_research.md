@@ -21,7 +21,7 @@
 sequenceDiagram
     autonumber
     actor User as 用户
-    participant Orch as 主 Agent (Orchestrator)
+    participant Orch as "主 Agent (Orchestrator)"
     participant Sub as 子级 Researcher Agent
     participant Web as Tavily & httpx 网页解析
     participant Think as Think Tool 反思记录

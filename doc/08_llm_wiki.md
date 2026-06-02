@@ -20,19 +20,19 @@
 
 ```mermaid
 graph TD
-    User([1. 投喂新源文件或提出问题]) --> Runner[runner.py 任务分发器]
+    User(["1. 投喂新源文件或提出问题"]) --> Runner["runner.py 任务分发器"]
     
     subgraph "三阶段自闭环工作流"
-        Runner -->|--mode init| Init[2. 初始化 Wiki 框架与 AGENTS.md]
-        Runner -->|--mode ingest| Ingest[3. 提取 takeaways 并合并至 canonical 维基页]
-        Runner -->|--mode query| Query[4. 读 index.md 路由 -> 抓取维基页回答并缓存答案]
-        Runner -->|--mode lint| Lint[5. 全局自动巡检: 修补失效链接、去除重复、消解矛盾]
+        Runner -->|--mode init| Init["2. 初始化 Wiki 框架与 AGENTS.md"]
+        Runner -->|--mode ingest| Ingest["3. 提取 takeaways 并合并至 canonical 维基页"]
+        Runner -->|--mode query| Query["4. 读 index.md 路由 -> 抓取维基页回答并缓存答案"]
+        Runner -->|--mode lint| Lint["5. 全局自动巡检: 修补失效链接、去除重复、消解矛盾"]
     end
 
-    Ingest -->|更新/写入物理页面| Filesystem[(本地工作区 /wiki/ 目录)]
-    Lint -->|自动重构索引| Index[wiki/index.md 结构化目录]
-    Runner -->|6. 本地运行结束| Hub[langsmith hub push 到云端 Context Hub]
-    Hub --> Team([团队成员评审并促进版本演进])
+    Ingest -->|更新/写入物理页面| Filesystem[("本地工作区 /wiki/ 目录")]
+    Lint -->|自动重构索引| Index["wiki/index.md 结构化目录"]
+    Runner -->|6. 本地运行结束| Hub["langsmith hub push 到云端 Context Hub"]
+    Hub --> Team(["团队成员评审并促进版本演进"])
 ```
 
 ---

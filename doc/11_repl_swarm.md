@@ -22,10 +22,10 @@
 sequenceDiagram
     autonumber
     actor User as 用户
-    participant Orch as Deep Agent (Orchestrator)
-    participant QJS as QuickJS 内置引擎 (langchain_quickjs)
-    participant Middleware as CodeInterpreterMiddleware (PTC)
-    participant Sub as 子 Agent 集群 (Subagents)
+    participant Orch as "Deep Agent (Orchestrator)"
+    participant QJS as "QuickJS 内置引擎 (langchain_quickjs)"
+    participant Middleware as "CodeInterpreterMiddleware (PTC)"
+    participant Sub as "子 Agent 集群 (Subagents)"
 
     User->>Orch: 提出海量并发任务 ("并行写入 a, b, c 三个文件")
     Orch->>QJS: 执行代码解释器工具 (评估 JavaScript 脚本)
