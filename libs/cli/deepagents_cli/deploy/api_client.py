@@ -20,7 +20,7 @@ import sys
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -212,9 +212,9 @@ class ApiClient:
         """Return all registered MCP servers in this workspace."""
         body = self._request("GET", f"{_DEPLOY_PATH}/mcp-servers")
         if isinstance(body, list):
-            return list(body)
+            return [cast("dict[str, Any]", item) for item in body]
         if isinstance(body, dict) and isinstance(body.get("servers"), list):
-            return list(body["servers"])
+            return [cast("dict[str, Any]", item) for item in body["servers"]]
         msg = "Unexpected MCP server list response."
         raise ApiError(status=0, detail=msg)
 
@@ -266,6 +266,34 @@ class ApiClient:
     def delete_mcp_server(self, mcp_server_id: str) -> None:
         """Delete an MCP server by ID."""
         self._request("DELETE", f"{_DEPLOY_PATH}/mcp-servers/{mcp_server_id}")
+
+    def list_mcp_server_tools(
+        self,
+        url: str,
+        *,
+        oauth_provider_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the tools exposed by a registered MCP server.
+
+        Backed by `GET /v1/deepagents/mcp/tools`, which resolves the server by
+        URL (cache-first, with a remote MCP `tools/list` fallback).
+
+        Args:
+            url: The registered MCP server URL.
+            oauth_provider_id: OAuth provider id; required for OAuth servers.
+
+        Returns:
+            MCP tool definitions, each with `name`, `description`, and
+            `inputSchema`.
+        """
+        params: dict[str, Any] = {"url": url}
+        if oauth_provider_id:
+            params["oauth_provider_id"] = oauth_provider_id
+        body = self._request("GET", f"{_DEPLOY_PATH}/mcp/tools", params=params)
+        if isinstance(body, dict) and isinstance(body.get("tools"), list):
+            return list(body["tools"])
+        msg = "Unexpected MCP tools response."
+        raise ApiError(status=0, detail=msg)
 
     def register_mcp_oauth_provider(self, mcp_server_id: str) -> dict[str, Any]:
         """Register the caller's per-user OAuth provider for an MCP server."""

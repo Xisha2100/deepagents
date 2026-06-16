@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import tomllib
-from unittest.mock import MagicMock, mock_open, patch
+from collections.abc import Mapping, Sequence  # noqa: TC003
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 from packaging.version import InvalidVersion, Version
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 from deepagents_code._version import __version__
+from deepagents_code.extras_info import ExtrasIntrospectionError, installed_extra_names
 from deepagents_code.update_check import (
     CACHE_TTL,
+    InstallMethod,
     _extract_release_times,
     _latest_from_releases,
     _parse_version,
@@ -22,27 +30,38 @@ from deepagents_code.update_check import (
     create_update_log_path,
     detect_install_method,
     editable_extra_hint,
+    editable_package_hint,
     format_age_suffix,
     format_installed_age_suffix,
     format_release_age,
     format_release_age_parenthetical,
     format_sdk_age_suffix,
     format_sdk_release_age,
+    get_cached_update_available,
     get_latest_version,
     get_release_time,
     get_sdk_release_time,
     get_seen_version,
     install_extra_command,
+    install_extras_command,
     install_package_command,
     is_auto_update_enabled,
+    is_auto_update_explicitly_set,
+    is_installed_version_at_least,
     is_update_available,
     is_valid_extra_name,
+    is_valid_package_name,
+    mark_auto_update_default_acknowledged,
     mark_update_notified,
     mark_version_seen,
     perform_install_extra,
+    perform_install_package,
     perform_upgrade,
+    prerelease_upgrade_supported,
     set_auto_update,
+    should_announce_auto_update_default,
     should_notify_update,
+    upgrade_command,
 )
 
 
@@ -64,25 +83,43 @@ def update_log_dir(tmp_path):
 
 def _mock_pypi_response(
     version: str = "99.0.0",
-    releases: dict[str, list[dict[str, object]]] | None = None,
+    releases: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
     release_times: dict[str, str] | None = None,
 ) -> MagicMock:
     if releases is None:
         releases = {version: [{"filename": "fake.tar.gz"}]}
+    releases_data = {
+        ver: [dict(file) for file in files] for ver, files in releases.items()
+    }
     release_times = release_times or {}
     # Stamp upload_time_iso_8601 onto the first file of each release so the
     # real extraction path runs in tests.
     for ver, iso in release_times.items():
-        files = releases.get(ver)
+        files = releases_data.get(ver)
         if files:
             files[0]["upload_time_iso_8601"] = iso
     resp = MagicMock()
     resp.json.return_value = {
         "info": {"version": version},
-        "releases": releases,
+        "releases": releases_data,
     }
     resp.raise_for_status = MagicMock()
     return resp
+
+
+def _write_dist_info(
+    root: Path,
+    name: str,
+    *,
+    version: str = "1.0.0",
+    requires: tuple[str, ...] = (),
+) -> None:
+    normalized = name.replace("-", "_")
+    dist_info = root / f"{normalized}-{version}.dist-info"
+    dist_info.mkdir()
+    metadata = ["Metadata-Version: 2.1", f"Name: {name}", f"Version: {version}"]
+    metadata.extend(f"Requires-Dist: {req}" for req in requires)
+    dist_info.joinpath("METADATA").write_text("\n".join(metadata), encoding="utf-8")
 
 
 class TestParseVersion:
@@ -114,6 +151,20 @@ class TestParseVersion:
         assert _parse_version("1.0.0a2") < _parse_version("1.0.0b1")
         assert _parse_version("1.0.0b1") < _parse_version("1.0.0rc1")
         assert _parse_version("1.0.0rc1") < _parse_version("1.0.0")
+
+
+class TestInstalledVersionAtLeast:
+    def test_true_when_distribution_metadata_matches_target(self) -> None:
+        with patch("importlib.metadata.version", return_value="2.0.0"):
+            assert is_installed_version_at_least("2.0.0") is True
+
+    def test_true_when_distribution_metadata_is_newer(self) -> None:
+        with patch("importlib.metadata.version", return_value="2.0.1"):
+            assert is_installed_version_at_least("2.0.0") is True
+
+    def test_false_when_distribution_metadata_is_older(self) -> None:
+        with patch("importlib.metadata.version", return_value="1.9.9"):
+            assert is_installed_version_at_least("2.0.0") is False
 
 
 class TestLatestFromReleases:
@@ -156,6 +207,51 @@ class TestLatestFromReleases:
         }
         assert _latest_from_releases(releases, include_prereleases=False) is None
         assert _latest_from_releases(releases, include_prereleases=True) == "1.0.0b1"
+
+
+class TestCachedUpdateAvailable:
+    def test_fresh_cache_reports_update_without_http(self, cache_file) -> None:
+        """Fresh cache can drive startup auto-update without network access."""
+        cache_file.write_text(
+            json.dumps({"version": "99.0.0", "checked_at": time.time()}),
+            encoding="utf-8",
+        )
+
+        with patch("requests.get") as mock_get:
+            assert get_cached_update_available() == (True, "99.0.0")
+
+        mock_get.assert_not_called()
+
+    def test_stale_cache_returns_no_answer_without_http(self, cache_file) -> None:
+        """Stale cache must not trigger a startup network request."""
+        cache_file.write_text(
+            json.dumps(
+                {"version": "99.0.0", "checked_at": time.time() - CACHE_TTL - 1}
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("requests.get") as mock_get:
+            assert get_cached_update_available() == (False, None)
+
+        mock_get.assert_not_called()
+
+    def test_missing_cache_returns_no_answer_without_http(self, cache_file) -> None:
+        """Missing cache should not block startup on a network request."""
+        assert not cache_file.exists()
+        with patch("requests.get") as mock_get:
+            assert get_cached_update_available() == (False, None)
+
+        mock_get.assert_not_called()
+
+    def test_fresh_current_cache_reports_no_update(self, cache_file) -> None:
+        """A fresh cache at the installed version should not update."""
+        cache_file.write_text(
+            json.dumps({"version": __version__, "checked_at": time.time()}),
+            encoding="utf-8",
+        )
+
+        assert get_cached_update_available() == (False, __version__)
 
 
 class TestGetLatestVersion:
@@ -475,6 +571,32 @@ class TestIsUpdateAvailable:
             patch("deepagents_code.update_check.__version__", "1.0.0"),
         ):
             is_update_available()
+
+        mock_get.assert_called_once_with(bypass_cache=False, include_prereleases=False)
+
+    def test_explicit_include_prereleases_overrides_stable_install(self) -> None:
+        """Explicit `include_prereleases=True` beats a stable installed version."""
+        with (
+            patch(
+                "deepagents_code.update_check.get_latest_version",
+                return_value=None,
+            ) as mock_get,
+            patch("deepagents_code.update_check.__version__", "1.0.0"),
+        ):
+            is_update_available(include_prereleases=True)
+
+        mock_get.assert_called_once_with(bypass_cache=False, include_prereleases=True)
+
+    def test_explicit_exclude_prereleases_overrides_prerelease_install(self) -> None:
+        """Explicit `include_prereleases=False` beats a pre-release install."""
+        with (
+            patch(
+                "deepagents_code.update_check.get_latest_version",
+                return_value=None,
+            ) as mock_get,
+            patch("deepagents_code.update_check.__version__", "1.0.0a1"),
+        ):
+            is_update_available(include_prereleases=False)
 
         mock_get.assert_called_once_with(bypass_cache=False, include_prereleases=False)
 
@@ -884,6 +1006,125 @@ class TestUpdateLogs:
         assert success is False
         assert "Unsupported install method" in output
 
+    async def test_perform_upgrade_uses_uv_prerelease_command(self) -> None:
+        """Pre-release upgrades pass uv's explicit pre-release strategy."""
+        with (
+            patch(
+                "deepagents_code.update_check.detect_install_method",
+                return_value="uv",
+            ),
+            patch(
+                "deepagents_code.update_check._run_install_subprocess",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ) as run_mock,
+        ):
+            success, _output = await perform_upgrade(include_prereleases=True)
+
+        assert success is True
+        run_mock.assert_awaited_once()
+        await_args = run_mock.await_args
+        assert await_args is not None
+        assert await_args.args[0] == (
+            "uv tool upgrade deepagents-code --prerelease allow"
+        )
+
+    async def test_perform_upgrade_follows_installed_prerelease_channel(self) -> None:
+        """Omitted pre-release preference follows an installed pre-release."""
+        with (
+            patch("deepagents_code.update_check.__version__", "1.0.0rc1"),
+            patch(
+                "deepagents_code.update_check.detect_install_method",
+                return_value="uv",
+            ),
+            patch(
+                "deepagents_code.update_check._run_install_subprocess",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ) as run_mock,
+        ):
+            success, _output = await perform_upgrade()
+
+        assert success is True
+        run_mock.assert_awaited_once()
+        await_args = run_mock.await_args
+        assert await_args is not None
+        assert await_args.args[0] == (
+            "uv tool upgrade deepagents-code --prerelease allow"
+        )
+
+    async def test_perform_upgrade_uses_plain_uv_command_by_default(self) -> None:
+        """Stable upgrades shell out to uv without the pre-release strategy.
+
+        `perform_upgrade` routes through `upgrade_command(method, ...)`, so a
+        regression that always opted into the pre-release channel would slip
+        past the default-path tests that override `_UPGRADE_COMMANDS`.
+        """
+        with (
+            patch("deepagents_code.update_check.__version__", "1.0.0"),
+            patch(
+                "deepagents_code.update_check.detect_install_method",
+                return_value="uv",
+            ),
+            patch(
+                "deepagents_code.update_check._run_install_subprocess",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ) as run_mock,
+        ):
+            success, _output = await perform_upgrade()
+
+        assert success is True
+        run_mock.assert_awaited_once()
+        await_args = run_mock.await_args
+        assert await_args is not None
+        assert await_args.args[0] == "uv tool upgrade deepagents-code"
+
+    async def test_perform_upgrade_refuses_prerelease_for_brew(self) -> None:
+        """Pre-release channel switching is only safe for uv tool installs."""
+        with (
+            patch(
+                "deepagents_code.update_check.detect_install_method",
+                return_value="brew",
+            ),
+            patch(
+                "deepagents_code.update_check._run_install_subprocess",
+                new_callable=AsyncMock,
+            ) as run_mock,
+        ):
+            success, output = await perform_upgrade(include_prereleases=True)
+
+        assert success is False
+        assert "Pre-release updates aren't supported for this install" in output
+        # The refusal must short-circuit before shelling out to `brew`.
+        run_mock.assert_not_awaited()
+
+    def test_upgrade_command_prerelease(self) -> None:
+        """Manual fallback command includes uv's pre-release strategy."""
+        assert (
+            upgrade_command(include_prereleases=True)
+            == "uv tool upgrade deepagents-code --prerelease allow"
+        )
+
+    def test_prerelease_upgrade_supported_for_uv(self) -> None:
+        """The uv install method can be steered onto the pre-release channel."""
+        supported, reason = prerelease_upgrade_supported("uv")
+
+        assert supported is True
+        assert reason is None
+
+    @pytest.mark.parametrize("method", ["brew", "other", "unknown"])
+    def test_prerelease_upgrade_unsupported_for_non_uv(
+        self,
+        method: InstallMethod,
+    ) -> None:
+        """Non-uv installs are refused with a user-facing reason."""
+        supported, reason = prerelease_upgrade_supported(method)
+
+        assert supported is False
+        assert reason is not None
+        assert "aren't supported for this install" in reason
+
 
 class TestInstallExtraCommand:
     """`install_extra_command` builds the uv tool install string."""
@@ -891,20 +1132,125 @@ class TestInstallExtraCommand:
     def test_basic(self) -> None:
         """Single-quoted bracket form, with `-U` to reinstall."""
         assert (
-            install_extra_command("quickjs")
+            install_extras_command(["quickjs"])
             == "uv tool install -U 'deepagents-code[quickjs]'"
         )
 
     def test_provider_extra(self) -> None:
         assert (
-            install_extra_command("fireworks")
+            install_extras_command(["fireworks"])
             == "uv tool install -U 'deepagents-code[fireworks]'"
+        )
+
+    def test_installed_extra_names_missing_distribution_returns_empty(self) -> None:
+        """Display-only introspection stays forgiving when metadata is absent."""
+        assert installed_extra_names("does-not-exist-pkg-xyz-abc") == set()
+
+    def test_install_extra_command_refuses_missing_distribution(self) -> None:
+        """Reinstall commands must not drop extras when metadata is unavailable."""
+        with pytest.raises(ExtrasIntrospectionError, match="cannot preserve"):
+            install_extra_command("quickjs", distribution_name="missing-dcode-test")
+
+    def test_no_installed_extras_from_clean_metadata(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Clean metadata with no installed optional deps is distinct from failure."""
+        _write_dist_info(
+            tmp_path,
+            "deepagents-code",
+            requires=('definitely-absent-dcode-test-quickjs-xyz; extra == "quickjs"',),
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        assert installed_extra_names("deepagents-code") == set()
+        assert (
+            install_extra_command("quickjs", distribution_name="deepagents-code")
+            == "uv tool install -U 'deepagents-code[quickjs]'"
+        )
+
+    def test_install_extra_command_refuses_invalid_metadata(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Malformed optional-dependency metadata must not drop existing extras."""
+        _write_dist_info(
+            tmp_path,
+            "deepagents-code",
+            requires=("not a valid requirement ; ;",),
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        with pytest.raises(ExtrasIntrospectionError, match="Could not parse"):
+            install_extra_command("quickjs", distribution_name="deepagents-code")
+
+    def test_preserves_installed_extras(self, tmp_path, monkeypatch) -> None:
+        """Installing a new extra keeps already-installed extras selected."""
+        _write_dist_info(tmp_path, "definitely-present-dcode-test-nvidia")
+        _write_dist_info(
+            tmp_path,
+            "deepagents-code",
+            requires=(
+                'definitely-present-dcode-test-nvidia; extra == "nvidia"',
+                'definitely-absent-dcode-test-baseten-xyz; extra == "baseten"',
+            ),
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        assert installed_extra_names("deepagents-code") == {"nvidia"}
+        assert (
+            install_extra_command("baseten", distribution_name="deepagents-code")
+            == "uv tool install -U 'deepagents-code[baseten,nvidia]'"
+        )
+
+    def test_dedupes_existing_extra(self, tmp_path, monkeypatch) -> None:
+        """Installing an already-present extra does not duplicate it."""
+        _write_dist_info(tmp_path, "definitely-present-dcode-test-nvidia")
+        _write_dist_info(
+            tmp_path,
+            "deepagents-code",
+            requires=('definitely-present-dcode-test-nvidia; extra == "nvidia"',),
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        assert (
+            install_extra_command("nvidia", distribution_name="deepagents-code")
+            == "uv tool install -U 'deepagents-code[nvidia]'"
+        )
+
+    def test_drops_composite_extras(self, tmp_path, monkeypatch) -> None:
+        """Composite extras are not echoed back into uv reinstall commands."""
+        _write_dist_info(tmp_path, "definitely-present-dcode-test-nvidia")
+        _write_dist_info(tmp_path, "definitely-present-dcode-test-openai")
+        _write_dist_info(
+            tmp_path,
+            "deepagents-code",
+            requires=(
+                'definitely-present-dcode-test-nvidia; extra == "nvidia"',
+                'definitely-present-dcode-test-openai; extra == "all-providers"',
+            ),
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        assert installed_extra_names("deepagents-code") == {"nvidia"}
+        assert (
+            install_extra_command("baseten", distribution_name="deepagents-code")
+            == "uv tool install -U 'deepagents-code[baseten,nvidia]'"
+        )
+
+    def test_sorts_extras_deterministically(self) -> None:
+        assert (
+            install_extras_command({"quickjs", "baseten", "nvidia"})
+            == "uv tool install -U 'deepagents-code[baseten,nvidia,quickjs]'"
         )
 
     def test_rejects_shell_metacharacters(self) -> None:
         assert not is_valid_extra_name("quickjs']; touch /tmp/pwned; '")
         with pytest.raises(ValueError, match="Invalid extra name"):
-            install_extra_command("quickjs']; touch /tmp/pwned; '")
+            install_extra_command(
+                "quickjs']; touch /tmp/pwned; '",
+                distribution_name="missing-dcode-test",
+            )
+        with pytest.raises(ValueError, match="Invalid extra name"):
+            install_extras_command(["quickjs", "bad;name"])
 
 
 class TestEditableExtraHint:
@@ -925,19 +1271,85 @@ class TestEditableExtraHint:
 class TestInstallPackageCommand:
     """`install_package_command` builds a uv tool package install string."""
 
-    def test_basic(self) -> None:
+    def test_basic_no_extras(self, tmp_path, monkeypatch) -> None:
+        """Clean metadata with no installed extras yields a plain requirement."""
+        _write_dist_info(
+            tmp_path,
+            "deepagents-code",
+            requires=('definitely-absent-dcode-test-quickjs-xyz; extra == "quickjs"',),
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
         assert (
-            install_package_command("langchain-custom")
+            install_package_command(
+                "langchain-custom", distribution_name="deepagents-code"
+            )
             == "uv tool install -U deepagents-code --with langchain-custom"
         )
 
-    def test_allows_pep508_name_separators(self) -> None:
+    def test_allows_pep508_name_separators(self, tmp_path, monkeypatch) -> None:
+        _write_dist_info(
+            tmp_path,
+            "deepagents-code",
+            requires=('definitely-absent-dcode-test-quickjs-xyz; extra == "quickjs"',),
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
         assert (
-            install_package_command("langchain.custom_provider")
+            install_package_command(
+                "langchain.custom_provider", distribution_name="deepagents-code"
+            )
             == "uv tool install -U deepagents-code --with langchain.custom_provider"
         )
 
+    def test_preserves_installed_extras(self, tmp_path, monkeypatch) -> None:
+        """Adding a package keeps already-installed extras selected."""
+        _write_dist_info(tmp_path, "definitely-present-dcode-test-nvidia")
+        _write_dist_info(
+            tmp_path,
+            "deepagents-code",
+            requires=(
+                'definitely-present-dcode-test-nvidia; extra == "nvidia"',
+                'definitely-absent-dcode-test-baseten-xyz; extra == "baseten"',
+            ),
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        assert installed_extra_names("deepagents-code") == {"nvidia"}
+        assert (
+            install_package_command(
+                "langchain-custom", distribution_name="deepagents-code"
+            )
+            == "uv tool install -U 'deepagents-code[nvidia]' --with langchain-custom"
+        )
+
+    def test_refuses_missing_distribution(self) -> None:
+        """Reinstalls must not drop extras when metadata is unavailable."""
+        with pytest.raises(ExtrasIntrospectionError, match="cannot preserve"):
+            install_package_command(
+                "langchain-custom", distribution_name="missing-dcode-test"
+            )
+
+    def test_refuses_invalid_metadata(self, tmp_path, monkeypatch) -> None:
+        """Malformed optional-dependency metadata must not drop existing extras."""
+        _write_dist_info(
+            tmp_path,
+            "deepagents-code",
+            requires=("not a valid requirement ; ;",),
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        with pytest.raises(ExtrasIntrospectionError, match="Could not parse"):
+            install_package_command(
+                "langchain-custom", distribution_name="deepagents-code"
+            )
+
     def test_rejects_shell_metacharacters(self) -> None:
+        """A bad package name raises before extras introspection runs.
+
+        Validation precedes the distribution lookup, so the rejection holds
+        regardless of metadata availability.
+        """
         with pytest.raises(ValueError, match="Invalid package name"):
             install_package_command("langchain-custom; touch /tmp/pwned")
 
@@ -1028,6 +1440,170 @@ class TestPerformInstallExtra:
         assert "not found" in output
 
 
+class TestIsValidPackageName:
+    """`is_valid_package_name` accepts PEP 508 names, rejects the rest."""
+
+    def test_accepts_plain_and_separated_names(self) -> None:
+        assert is_valid_package_name("langchain-custom")
+        assert is_valid_package_name("langchain.custom_provider")
+
+    def test_rejects_shell_metacharacters(self) -> None:
+        assert not is_valid_package_name("langchain-custom; touch /tmp/pwned")
+
+    def test_rejects_option_injection_leading_dash(self) -> None:
+        """A leading dash would smuggle uv options into `--with <name>`.
+
+        The command is `uv tool install -U deepagents-code --with <name>`; a name
+        like `-rreqs.txt` or `--editable` would be parsed by uv as a flag, not a
+        package. The validator must reject these regardless of `--force`/`--yes`.
+        """
+        assert not is_valid_package_name("-rreqs.txt")
+        assert not is_valid_package_name("--force")
+        assert not is_valid_package_name("-e.")
+
+    def test_rejects_boundary_separators_and_whitespace(self) -> None:
+        """Leading/trailing separators and internal whitespace are rejected."""
+        for bad in (".foo", "foo.", "-foo", "foo-", "_foo", "foo_", "foo bar"):
+            assert not is_valid_package_name(bad), bad
+
+    def test_rejects_non_ascii(self) -> None:
+        r"""The pattern is ASCII-only; a `\w`-based regex would wrongly accept."""
+        assert not is_valid_package_name("foöbar")
+
+    def test_rejects_empty(self) -> None:
+        assert not is_valid_package_name("")
+
+
+class TestEditablePackageHint:
+    """`editable_package_hint` names the package without a raw `uv` command."""
+
+    def test_names_package_without_uv_command(self) -> None:
+        hint = editable_package_hint("langchain-custom")
+        assert "langchain-custom" in hint
+        # We intentionally don't surface raw `uv tool` commands to the user.
+        assert "uv tool" not in hint
+
+
+class TestPerformInstallPackage:
+    """`perform_install_package` execution paths."""
+
+    async def test_editable_install_refuses(self) -> None:
+        """Editable installs cannot accept packages via uv tool install."""
+        with patch(
+            "deepagents_code.update_check.detect_install_method",
+            return_value="unknown",
+        ):
+            success, output = await perform_install_package("langchain-custom")
+        assert success is False
+        assert "Editable install" in output
+        assert "langchain-custom" in output
+        # No raw `uv tool` command is surfaced to the user.
+        assert "uv tool" not in output
+
+    async def test_brew_install_refuses(self) -> None:
+        """Homebrew formula can't add packages to the tool env."""
+        with patch(
+            "deepagents_code.update_check.detect_install_method",
+            return_value="brew",
+        ):
+            success, output = await perform_install_package("langchain-custom")
+        assert success is False
+        assert "Homebrew" in output
+
+    async def test_other_install_refuses(self) -> None:
+        """Unknown non-editable installs cannot be updated through uv tool."""
+        with patch(
+            "deepagents_code.update_check.detect_install_method",
+            return_value="other",
+        ):
+            success, output = await perform_install_package("langchain-custom")
+        assert success is False
+        assert "Unsupported install method" in output
+
+    async def test_invalid_package_refuses_before_detecting_install(self) -> None:
+        """Malformed package names must never reach command construction."""
+        with patch(
+            "deepagents_code.update_check.detect_install_method",
+        ) as detect:
+            success, output = await perform_install_package("custom; echo nope")
+        assert success is False
+        assert "Invalid package name" in output
+        detect.assert_not_called()
+
+    async def test_uv_install_runs(self, tmp_path) -> None:
+        """`uv` method runs the subprocess and returns success."""
+        log_path = tmp_path / "install.log"
+        # Inject a no-op command in place of the real uv tool install so the
+        # subprocess actually exits 0 without touching the environment.
+        with (
+            patch(
+                "deepagents_code.update_check.detect_install_method",
+                return_value="uv",
+            ),
+            patch(
+                "deepagents_code.update_check.shutil.which",
+                return_value="/usr/bin/uv",
+            ),
+            patch(
+                "deepagents_code.update_check.install_package_command",
+                return_value="printf 'ok\\n'",
+            ),
+        ):
+            success, output = await perform_install_package(
+                "langchain-custom", log_path=log_path
+            )
+        assert success is True
+        assert output == "ok"
+
+    async def test_uv_missing_returns_actionable_error(self) -> None:
+        """When `uv` is not on PATH, surface a clear error before exec."""
+        with (
+            patch(
+                "deepagents_code.update_check.detect_install_method",
+                return_value="uv",
+            ),
+            patch(
+                "deepagents_code.update_check.shutil.which",
+                return_value=None,
+            ),
+        ):
+            success, output = await perform_install_package("langchain-custom")
+        assert success is False
+        assert "uv" in output
+        assert "not found" in output
+
+    async def test_extras_introspection_failure_is_reported_and_logged(
+        self, caplog
+    ) -> None:
+        """Unreadable distribution metadata surfaces as a reported, logged error.
+
+        Guards the `ExtrasIntrospectionError` arm distinctly from the
+        `ValueError` arm: a narrowing back to `except ValueError` would let the
+        error escape unhandled, and dropping the log would erase the only
+        breadcrumb for what is an environment-corruption signal.
+        """
+        with (
+            patch(
+                "deepagents_code.update_check.detect_install_method",
+                return_value="uv",
+            ),
+            patch(
+                "deepagents_code.update_check.shutil.which",
+                return_value="/usr/bin/uv",
+            ),
+            patch(
+                "deepagents_code.extras_info.installed_extra_names",
+                side_effect=ExtrasIntrospectionError("metadata unreadable"),
+            ),
+            caplog.at_level(logging.WARNING, logger="deepagents_code.update_check"),
+        ):
+            success, output = await perform_install_package("langchain-custom")
+        assert success is False
+        assert "ExtrasIntrospectionError" in output
+        assert "metadata unreadable" in output
+        assert "introspect installed extras" in caplog.text
+
+
 class TestRunInstallSubprocessFailureModes:
     """Failure-mode coverage routed through `perform_install_extra`.
 
@@ -1107,15 +1683,20 @@ class TestRunInstallSubprocessFailureModes:
 
 
 def _mock_sdk_pypi_response(
-    releases: dict[str, list[dict[str, object]]] | None = None,
+    releases: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
 ) -> MagicMock:
     """Build a minimal PyPI response for the `deepagents` SDK.
 
     The SDK lookup reads from the `releases` map (keyed by version) rather
     than `info.version`, so only that field is required.
     """
+    releases_data = (
+        {ver: [dict(file) for file in files] for ver, files in releases.items()}
+        if releases is not None
+        else {}
+    )
     resp = MagicMock()
-    resp.json.return_value = {"releases": releases or {}}
+    resp.json.return_value = {"releases": releases_data}
     resp.raise_for_status = MagicMock()
     return resp
 
@@ -1400,8 +1981,8 @@ class TestIsAutoUpdateEnabled:
         with patch("deepagents_code.update_check.DEFAULT_CONFIG_PATH", path):
             yield path
 
-    def test_default_is_false(self, config_path) -> None:  # noqa: ARG002
-        """Auto-update defaults to disabled."""
+    def test_default_is_true(self, config_path) -> None:  # noqa: ARG002
+        """Auto-update defaults to enabled (opt-out)."""
         with (
             patch("deepagents_code.config._is_editable_install", return_value=False),
             patch.dict("os.environ", {}, clear=False),
@@ -1409,7 +1990,7 @@ class TestIsAutoUpdateEnabled:
             import os
 
             os.environ.pop("DEEPAGENTS_CODE_AUTO_UPDATE", None)
-            assert is_auto_update_enabled() is False
+            assert is_auto_update_enabled() is True
 
     def test_env_var_enables(self, config_path) -> None:  # noqa: ARG002
         """DEEPAGENTS_CODE_AUTO_UPDATE=1 enables auto-update."""
@@ -1419,12 +2000,193 @@ class TestIsAutoUpdateEnabled:
         ):
             assert is_auto_update_enabled() is True
 
+    def test_env_var_disables(self, config_path) -> None:  # noqa: ARG002
+        """DEEPAGENTS_CODE_AUTO_UPDATE=0 opts out of auto-update."""
+        with (
+            patch("deepagents_code.config._is_editable_install", return_value=False),
+            patch.dict("os.environ", {"DEEPAGENTS_CODE_AUTO_UPDATE": "0"}),
+        ):
+            assert is_auto_update_enabled() is False
+
+    def test_config_disables(self, config_path) -> None:
+        """`[update].auto_update = false` opts out of auto-update."""
+        set_auto_update(False)
+        assert config_path.exists()
+        with (
+            patch("deepagents_code.config._is_editable_install", return_value=False),
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            import os
+
+            os.environ.pop("DEEPAGENTS_CODE_AUTO_UPDATE", None)
+            assert is_auto_update_enabled() is False
+
+    def test_empty_env_disables(self, config_path, monkeypatch) -> None:  # noqa: ARG002
+        """An explicitly-empty env value is treated as falsy (opt-out)."""
+        monkeypatch.setenv("DEEPAGENTS_CODE_AUTO_UPDATE", "")
+        with patch("deepagents_code.config._is_editable_install", return_value=False):
+            assert is_auto_update_enabled() is False
+
+    def test_unrecognized_env_falls_through_to_default(
+        self, config_path, monkeypatch, caplog
+    ) -> None:
+        """A garbage env value is ignored (with a warning) and uses the default.
+
+        Guards the `classify_env_bool(...) is None` branch: a typo'd disable
+        attempt must not be mistaken for a real value. With no config written
+        it falls through to the opt-out default of `True`.
+        """
+        assert not config_path.exists()  # no config backs the result
+        monkeypatch.setenv("DEEPAGENTS_CODE_AUTO_UPDATE", "ture")
+        with (
+            patch("deepagents_code.config._is_editable_install", return_value=False),
+            caplog.at_level(logging.WARNING, logger="deepagents_code.update_check"),
+        ):
+            assert is_auto_update_enabled() is True
+        assert "expected bool" in caplog.text
+
+    def test_unrecognized_env_falls_through_to_config(
+        self, config_path, monkeypatch
+    ) -> None:
+        """A garbage env value yields to `config.toml` rather than overriding it."""
+        set_auto_update(False)
+        assert config_path.exists()
+        monkeypatch.setenv("DEEPAGENTS_CODE_AUTO_UPDATE", "maybe")
+        with patch("deepagents_code.config._is_editable_install", return_value=False):
+            assert is_auto_update_enabled() is False
+
+    def test_env_overrides_config_to_disable(self, config_path, monkeypatch) -> None:  # noqa: ARG002
+        """A falsy env var wins over `[update].auto_update = true`."""
+        set_auto_update(True)
+        monkeypatch.setenv("DEEPAGENTS_CODE_AUTO_UPDATE", "0")
+        with patch("deepagents_code.config._is_editable_install", return_value=False):
+            assert is_auto_update_enabled() is False
+
+    def test_env_overrides_config_to_enable(self, config_path, monkeypatch) -> None:  # noqa: ARG002
+        """A truthy env var wins over `[update].auto_update = false`."""
+        set_auto_update(False)
+        monkeypatch.setenv("DEEPAGENTS_CODE_AUTO_UPDATE", "1")
+        with patch("deepagents_code.config._is_editable_install", return_value=False):
+            assert is_auto_update_enabled() is True
+
     def test_editable_install_always_disabled(self, config_path) -> None:
         """Editable installs never auto-update, even with config set."""
         set_auto_update(True)
         assert config_path.exists()
         with patch("deepagents_code.config._is_editable_install", return_value=True):
             assert is_auto_update_enabled() is False
+
+    def test_corrupt_config_fails_closed(
+        self, config_path, monkeypatch, caplog
+    ) -> None:
+        """A present-but-corrupt config disables auto-update despite the default.
+
+        The opt-out default is `True`, but a corrupt `config.toml` may hold an
+        explicit `auto_update = false`. Silently re-enabling auto-update (which
+        upgrades and re-execs) over an unreadable opt-out would be worse than
+        skipping, so a parse error must fail closed rather than fall through to
+        the default.
+        """
+        config_path.write_text("this = is not [valid toml", encoding="utf-8")
+        monkeypatch.delenv("DEEPAGENTS_CODE_AUTO_UPDATE", raising=False)
+        with (
+            patch("deepagents_code.config._is_editable_install", return_value=False),
+            caplog.at_level(logging.WARNING, logger="deepagents_code.update_check"),
+        ):
+            assert is_auto_update_enabled() is False
+        assert "disabling auto-update" in caplog.text
+
+
+class TestAutoUpdateDefaultMigration:
+    @pytest.fixture
+    def config_path(self, tmp_path):
+        """Override DEFAULT_CONFIG_PATH to use a temporary file."""
+        path = tmp_path / "config.toml"
+        with patch("deepagents_code.update_check.DEFAULT_CONFIG_PATH", path):
+            yield path
+
+    @pytest.fixture
+    def state_file(self, tmp_path):
+        """Override UPDATE_STATE_FILE to use a temporary file."""
+        path = tmp_path / "update_state.json"
+        with patch("deepagents_code.update_check.UPDATE_STATE_FILE", path):
+            yield path
+
+    def test_explicit_config_is_not_default(self, config_path, state_file) -> None:  # noqa: ARG002
+        """An explicit config choice counts as explicitly set."""
+        set_auto_update(True)
+        import os
+
+        os.environ.pop("DEEPAGENTS_CODE_AUTO_UPDATE", None)
+        assert is_auto_update_explicitly_set() is True
+        assert should_announce_auto_update_default() is False
+
+    def test_explicit_env_is_not_default(self, config_path, state_file) -> None:  # noqa: ARG002
+        """A recognized env value counts as explicitly set."""
+        with patch.dict("os.environ", {"DEEPAGENTS_CODE_AUTO_UPDATE": "1"}):
+            assert is_auto_update_explicitly_set() is True
+            assert should_announce_auto_update_default() is False
+
+    def test_implicit_default_announces_once(self, config_path, state_file) -> None:  # noqa: ARG002
+        """With no explicit choice, the migration notice fires exactly once."""
+        import os
+
+        os.environ.pop("DEEPAGENTS_CODE_AUTO_UPDATE", None)
+        assert is_auto_update_explicitly_set() is False
+        assert should_announce_auto_update_default() is True
+        mark_auto_update_default_acknowledged()
+        assert should_announce_auto_update_default() is False
+
+    def test_unrecognized_env_is_not_explicit(self, config_path, state_file) -> None:  # noqa: ARG002
+        """A garbage env token does not count as an explicit choice."""
+        import os
+
+        os.environ.pop("DEEPAGENTS_CODE_AUTO_UPDATE", None)
+        with patch.dict("os.environ", {"DEEPAGENTS_CODE_AUTO_UPDATE": "ture"}):
+            assert is_auto_update_explicitly_set() is False
+            assert should_announce_auto_update_default() is True
+
+    def test_corrupt_state_refires_notice(self, config_path, state_file) -> None:  # noqa: ARG002
+        """A corrupt state file fails open: the one-time notice fires again.
+
+        `_read_update_state` returns `{}` on unreadable JSON, so the
+        acknowledgement reads as absent. Re-showing the notice is the safe
+        direction (versus silently auto-updating as if it had been seen).
+        """
+        import os
+
+        os.environ.pop("DEEPAGENTS_CODE_AUTO_UPDATE", None)
+        state_file.write_text("{ not valid json", encoding="utf-8")
+        assert should_announce_auto_update_default() is True
+
+    def test_corrupt_config_is_not_explicit(self, config_path, state_file) -> None:  # noqa: ARG002
+        """A corrupt config reads as 'no explicit choice' for the notice gate.
+
+        `is_auto_update_enabled` fails closed on a corrupt config, so the notice
+        gate never re-enables an unreadable opt-out; this documents that
+        `is_auto_update_explicitly_set` itself treats an unparseable file as
+        absent rather than raising.
+        """
+        import os
+
+        os.environ.pop("DEEPAGENTS_CODE_AUTO_UPDATE", None)
+        config_path.write_text("not [ valid toml", encoding="utf-8")
+        assert is_auto_update_explicitly_set() is False
+
+    def test_mark_tolerates_write_failure(self, config_path, tmp_path) -> None:  # noqa: ARG002
+        """A failed acknowledgement write returns `False` without raising.
+
+        The notice will re-fire next launch (surfaced to the user), but startup
+        must not crash because the state directory is unwritable.
+        """
+        # Point the state file beneath an existing *file* so the parent
+        # `mkdir`/write raises `OSError`, simulating an unwritable state dir.
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory", encoding="utf-8")
+        with patch(
+            "deepagents_code.update_check.UPDATE_STATE_FILE", blocker / "state.json"
+        ):
+            assert mark_auto_update_default_acknowledged() is False
 
 
 class TestShouldNotifyUpdate:
@@ -1673,5 +2435,7 @@ class TestShouldShowWhatsNew:
         mark_version_seen("1.0.0")
         with patch("deepagents_code.update_check.__version__", "2.0.0"):
             assert should_show_whats_new() is True
+        # Notification throttle still works
+        assert should_notify_update("2.0.0") is False
         # Notification throttle still works
         assert should_notify_update("2.0.0") is False
